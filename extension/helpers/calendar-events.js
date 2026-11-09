@@ -15,7 +15,8 @@
 import ECal from 'gi://ECal?version=2.0';
 import EDataServer from 'gi://EDataServer?version=1.2';
 import GLib from 'gi://GLib';
-import ICalGLib from 'gi://ICalGLib?version=3.0';
+// No version: use whichever libical-glib ECal links against (3.0 or 4.0).
+import ICalGLib from 'gi://ICalGLib';
 import System from 'system';
 
 const CONNECT_TIMEOUT_SECONDS = 15;
