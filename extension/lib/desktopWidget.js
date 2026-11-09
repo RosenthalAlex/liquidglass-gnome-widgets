@@ -60,7 +60,8 @@ class DesktopWidget extends St.Widget {
 
         this._buildMenu();
 
-        Main.layoutManager._backgroundGroup.add_child(this);
+        const container = extension.widgetGroup ?? Main.layoutManager._backgroundGroup;
+        container.add_child(this);
 
         const geometryKeys = ['x', 'y', ...this.sizeKeys()].map(k => `changed::${prefix}-${k}`);
         for (const signal of geometryKeys)

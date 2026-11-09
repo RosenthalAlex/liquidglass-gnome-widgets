@@ -1,3 +1,5 @@
+import Clutter from 'gi://Clutter';
+import Meta from 'gi://Meta';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
@@ -38,22 +40,54 @@ export default class LiquidGlassWidgets extends Extension {
         this._widgets = new Map();
         this.timerModel = new TimerModel(this._settings);
 
+        this.widgetGroup = new Clutter.Actor();
+        global.window_group.add_child(this.widgetGroup);
+        this._restackWidgetGroup();
+
         for (const {key} of WIDGETS)
             this._settings.connectObject(`changed::${key}`, () => this._sync(), this);
         Main.sessionMode.connectObject('updated', () => this._sync(), this);
+        global.display.connectObject('restacked', () => this._restackWidgetGroup(), this);
+        global.window_group.connectObject('child-added', () => this._restackWidgetGroup(), this);
         this._sync();
     }
 
     disable() {
         this._settings.disconnectObject(this);
         Main.sessionMode.disconnectObject(this);
+        global.display.disconnectObject(this);
+        global.window_group.disconnectObject(this);
         for (const widget of this._widgets.values())
             widget.destroy();
         this._widgets = null;
+        this.widgetGroup.destroy();
+        this.widgetGroup = null;
         this.timerModel.destroy();
         this.timerModel = null;
         this._settings = null;
         clearImageCache();
+    }
+
+    // Keep widgetGroup above the wallpaper and any desktop-icons window
+    // (e.g. DING's Meta.WindowType.DESKTOP window), but below every normal
+    // window. Mutter's sync_actor_stacking pushes _backgroundGroup to the
+    // very bottom of window_group below DESKTOP windows, so widgets placed
+    // inside _backgroundGroup would have their pointer events swallowed by
+    // full-screen desktop-icons windows.
+    _restackWidgetGroup() {
+        if (!this.widgetGroup?.get_parent())
+            return;
+
+        let sibling = Main.layoutManager._backgroundGroup;
+        for (const actor of global.get_window_actors()) {
+            if (actor.get_parent() !== global.window_group)
+                continue;
+            const win = actor.meta_window;
+            if (win && win.get_window_type() === Meta.WindowType.DESKTOP)
+                sibling = actor;
+        }
+        if (sibling && sibling.get_parent() === global.window_group)
+            global.window_group.set_child_above_sibling(this.widgetGroup, sibling);
     }
 
     _sync() {
