@@ -236,6 +236,10 @@ export default class LiquidGlassWidgetsPrefs extends ExtensionPreferences {
         });
 
         const general = new Adw.PreferencesGroup({title: _('All Widgets')});
+        general.add(switchRow(settings, 'snap-to-grid', _('Snap to grid'),
+            _('Align widgets to a grid while dragging so they line up cleanly.')));
+        general.add(spinRow(settings, 'grid-size', _('Grid size'),
+            {lower: 8, upper: 128, step: 4}));
         general.add(switchRow(settings, 'lock-position', _('Lock position'),
             _('Stop widgets from moving when dragged.')));
 

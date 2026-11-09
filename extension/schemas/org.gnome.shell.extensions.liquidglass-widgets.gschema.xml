@@ -335,6 +335,14 @@
     <key name="lock-position" type="b">
       <default>false</default>
     </key>
+    <key name="snap-to-grid" type="b">
+      <default>true</default>
+      <summary>Snap widget positions to a grid when dragging</summary>
+    </key>
+    <key name="grid-size" type="i">
+      <default>24</default>
+      <summary>Grid step in stage pixels when snap-to-grid is enabled</summary>
+    </key>
 
     <!-- Style: same entries and defaults as the KDE widgets' main.xml -->
     <key name="style-mode" type="i">

@@ -158,8 +158,15 @@ class DesktopWidget extends St.Widget {
         const [sx, sy] = event.get_coords();
 
         if (this._grab) {
-            this._moveTo(sx - this._dragOffset[0], sy - this._dragOffset[1]);
-            return Clutter.EVENT_STOP;
+        let x = sx - this._dragOffset[0];
+        let y = sy - this._dragOffset[1];
+        if (this._settings.get_boolean('snap-to-grid')) {
+            const step = Math.max(4, this._settings.get_int('grid-size'));
+            x = Math.round(x / step) * step;
+            y = Math.round(y / step) * step;
+        }
+        this._moveTo(x, y);
+        return Clutter.EVENT_STOP;
         }
 
         const [ok, lx, ly] = this.transform_stage_point(sx, sy);
@@ -220,6 +227,11 @@ class DesktopWidget extends St.Widget {
             this._settings.set_int('style-mode', on ? 0 : 1));
         this._menu.addMenuItem(this._glassItem);
 
+        this._snapItem = new PopupMenu.PopupSwitchMenuItem(_('Snap to Grid'), true);
+        this._snapItem.connect('toggled', (_item, on) =>
+            this._settings.set_boolean('snap-to-grid', on));
+        this._menu.addMenuItem(this._snapItem);
+
         this._lockItem = new PopupMenu.PopupSwitchMenuItem(_('Lock Position'), false);
         this._lockItem.connect('toggled', (_item, on) =>
             this._settings.set_boolean('lock-position', on));
@@ -231,6 +243,7 @@ class DesktopWidget extends St.Widget {
 
     _openMenu() {
         this._glassItem.setToggleState(this._settings.get_int('style-mode') === 0);
+        this._snapItem.setToggleState(this._settings.get_boolean('snap-to-grid'));
         this._lockItem.setToggleState(this._settings.get_boolean('lock-position'));
         this._menu.toggle();
     }
