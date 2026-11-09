@@ -18,12 +18,13 @@
 // effects cache their result until a child actually changes.
 
 import Clutter from 'gi://Clutter';
-import Cogl from 'gi://Cogl';
 import GObject from 'gi://GObject';
 import Shell from 'gi://Shell';
 
 import * as Background from 'resource:///org/gnome/shell/ui/background.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+
+import {makeShaderEffect} from './shaderEffect.js';
 
 export const BLUR_PAD = 48;
 // The KDE blur is a Dual Kawase pyramid whose reach roughly doubles per
@@ -192,23 +193,8 @@ cogl_color_out = lg_glass(cogl_sampler0, (cogl_tex_coord_in[0].xy - lg_frame.xy)
     cogl_color_in.a;
 `;
 
-const LiquidGlassEffect = GObject.registerClass(
-class LiquidGlassEffect extends Shell.GLSLEffect {
-    _init() {
-        super._init();
-        this._locations = {};
-        for (const name of UNIFORMS)
-            this._locations[name] = this.get_uniform_location(`lg_${name}`);
-    }
-
-    vfunc_build_pipeline() {
-        this.add_glsl_snippet(Cogl.SnippetHook.FRAGMENT, DECLARATIONS, CODE, true);
-    }
-
-    setUniform(name, values) {
-        this.set_uniform_float(this._locations[name], values.length, values);
-    }
-});
+// Shell.GLSLEffect on GNOME 48-50, Clutter.ShaderEffect on 51+.
+const LiquidGlassEffect = makeShaderEffect(DECLARATIONS, CODE, 'lg_', UNIFORMS);
 
 export function monitorIndexAt(x, y) {
     const {monitors, primaryIndex} = Main.layoutManager;

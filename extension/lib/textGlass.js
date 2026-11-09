@@ -28,6 +28,8 @@ import St from 'gi://St';
 import * as Background from 'resource:///org/gnome/shell/ui/background.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
+import {makeShaderEffect} from './shaderEffect.js';
+
 import {BLUR_PAD, BLUR_RADIUS_SCALE, MAX_BLUR_RADIUS, effectFrame, monitorIndexAt} from './glass.js';
 import {buildGlyphField, SDF_RANGE} from './glyphField.js';
 
@@ -120,23 +122,8 @@ cogl_color_out = tg_glass(cogl_sampler0, (cogl_tex_coord_in[0].xy - tg_frame.xy)
     cogl_color_in.a;
 `;
 
-const TextGlassEffect = GObject.registerClass(
-class TextGlassEffect extends Shell.GLSLEffect {
-    _init() {
-        super._init();
-        this._locations = {};
-        for (const name of UNIFORMS)
-            this._locations[name] = this.get_uniform_location(`tg_${name}`);
-    }
-
-    vfunc_build_pipeline() {
-        this.add_glsl_snippet(Cogl.SnippetHook.FRAGMENT, DECLARATIONS, CODE, true);
-    }
-
-    setUniform(name, values) {
-        this.set_uniform_float(this._locations[name], values.length, values);
-    }
-});
+// Shell.GLSLEffect on GNOME 48-50, Clutter.ShaderEffect on 51+.
+const TextGlassEffect = makeShaderEffect(DECLARATIONS, CODE, 'tg_', UNIFORMS);
 
 export const TextGlass = GObject.registerClass(
 class TextGlass extends Clutter.Actor {

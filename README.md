@@ -35,7 +35,9 @@ them on in the settings' Clocks page.
 - **macOS Timer** (`timer`): drum pickers (scroll or drag them), rolling-digit countdown, and a preset list in the
   wide layout. A running timer keeps counting and rings while the screen is locked, and comes back after a log out.
 
-Tested on GNOME Shell 50 (Fedora 44, Wayland).
+Supports GNOME Shell 48–51. Tested on GNOME Shell 50 (Fedora 44, Wayland) and GNOME Shell 51.1. On GNOME 51,
+where `Shell.GLSLEffect` was removed, the glass shaders run through `Clutter.ShaderEffect` (see
+`extension/lib/shaderEffect.js`).
 
 ## Install
 
