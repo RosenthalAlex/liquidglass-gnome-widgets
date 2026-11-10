@@ -236,6 +236,8 @@ export default class LiquidGlassWidgetsPrefs extends ExtensionPreferences {
         });
 
         const general = new Adw.PreferencesGroup({title: _('All Widgets')});
+        general.add(switchRow(settings, 'scale-with-resolution', _('Scale with display resolution'),
+            _('Automatically scale widget positions and sizes when switching monitors or resolutions.')));
         general.add(switchRow(settings, 'snap-to-grid', _('Snap to grid'),
             _('Align widgets to a grid while dragging so they line up cleanly.')));
         general.add(spinRow(settings, 'grid-size', _('Grid size'),

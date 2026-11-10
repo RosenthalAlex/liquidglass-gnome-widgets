@@ -10,6 +10,7 @@
 
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import St from 'gi://St';
 
@@ -17,7 +18,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-import {LiquidGlass} from './glass.js';
+import {LiquidGlass, monitorIndexAt} from './glass.js';
 import {macColors} from './colors.js';
 
 const STYLE_KEYS = [
@@ -66,11 +67,16 @@ class DesktopWidget extends St.Widget {
         const geometryKeys = ['x', 'y', ...this.sizeKeys()].map(k => `changed::${prefix}-${k}`);
         for (const signal of geometryKeys)
             this._settings.connectObject(signal, () => this._loadGeometry(), this);
+        this._settings.connectObject('changed::scale-with-resolution', () => this._loadGeometry(), this);
         for (const key of STYLE_KEYS)
             this._settings.connectObject(`changed::${key}`, () => this._loadStyle(), this);
         this._interfaceSettings.connectObject('changed::color-scheme',
             () => this._loadStyle(), this);
         Main.layoutManager.connectObject('monitors-changed', () => this._loadGeometry(), this);
+        global.stage.connectObject(
+            'notify::width', () => this._loadGeometry(),
+            'notify::height', () => this._loadGeometry(),
+            this);
 
         this.connect('destroy', () => this._onDestroy());
     }
@@ -110,21 +116,54 @@ class DesktopWidget extends St.Widget {
         if (this._grab || this._savingPosition)
             return;
 
-        const [width, height] = this.readSize().map(v => Math.max(80, Math.round(v)));
+        let [rawW, rawH] = this.readSize();
         let x = this._settings.get_int(`${this._prefix}-x`);
         let y = this._settings.get_int(`${this._prefix}-y`);
 
+        const {monitors, primaryIndex} = Main.layoutManager;
+        const monIdx = x >= 0 && y >= 0 ? monitorIndexAt(x, y) : primaryIndex;
+        const mon = monitors[monIdx] ?? monitors[primaryIndex];
+
         if (x < 0 || y < 0) {
-            const area = Main.layoutManager.getWorkAreaForMonitor(Main.layoutManager.primaryIndex);
+            const width = Math.max(80, Math.round(rawW));
+            const height = Math.max(80, Math.round(rawH));
+            const area = Main.layoutManager.getWorkAreaForMonitor(primaryIndex);
             [x, y] = this.defaultPosition(area, width, height, EDGE_MARGIN);
+            this._width = width;
+            this._height = height;
+        } else if (mon && this._settings.get_boolean('scale-with-resolution')) {
+            const anchors = this._settings.get_value('position-anchors').deep_unpack();
+            let anchor = anchors[this._prefix];
+            if (!anchor || anchor[0] !== x || anchor[1] !== y) {
+                anchor = [x, y, mon.width, mon.height];
+                anchors[this._prefix] = anchor;
+                this._settings.set_value('position-anchors',
+                    new GLib.Variant('a{s(iiii)}', anchors));
+            }
+            const [, , refW, refH] = anchor;
+            if (refW > 0 && refH > 0 && (refW !== mon.width || refH !== mon.height)) {
+                const s = Math.min(mon.width / refW, mon.height / refH);
+                const width = Math.max(80, Math.round(rawW * s));
+                const height = Math.max(80, Math.round(rawH * s));
+                const relX = x - mon.x;
+                const relY = y - mon.y;
+                x = mon.x + Math.round(relX * (mon.width / refW));
+                y = mon.y + Math.round(relY * (mon.height / refH));
+                this._width = width;
+                this._height = height;
+            } else {
+                this._width = Math.max(80, Math.round(rawW));
+                this._height = Math.max(80, Math.round(rawH));
+            }
+        } else {
+            this._width = Math.max(80, Math.round(rawW));
+            this._height = Math.max(80, Math.round(rawH));
         }
 
-        this._width = width;
-        this._height = height;
-        this.set_size(width, height);
-        this.body.set_size(width, height);
+        this.set_size(this._width, this._height);
+        this.body.set_size(this._width, this._height);
         this._moveTo(x, y);
-        this.layoutContent(width, height);
+        this.layoutContent(this._width, this._height);
     }
 
     _moveTo(x, y) {
@@ -183,10 +222,27 @@ class DesktopWidget extends St.Widget {
 
         // Each set_int() fires a change that reloads the geometry; reloading
         // between the two would see a stale (or unset, -1) y and jump.
+        const [rawW] = this.readSize();
         const {x, y} = this;
+        const {monitors, primaryIndex} = Main.layoutManager;
+        const mon = monitors[monitorIndexAt(x + this._width / 2, y + this._height / 2)] ?? monitors[primaryIndex];
+        const scale = rawW > 0 ? this._width / rawW : 1;
         this._savingPosition = true;
-        this._settings.set_int(`${this._prefix}-x`, x);
-        this._settings.set_int(`${this._prefix}-y`, y);
+        if (mon && scale > 0) {
+            const refW = Math.round(mon.width / scale);
+            const refH = Math.round(mon.height / scale);
+            const refX = mon.x + Math.round((x - mon.x) / scale);
+            const refY = mon.y + Math.round((y - mon.y) / scale);
+            const anchors = this._settings.get_value('position-anchors').deep_unpack();
+            anchors[this._prefix] = [refX, refY, refW, refH];
+            this._settings.set_value('position-anchors',
+                new GLib.Variant('a{s(iiii)}', anchors));
+            this._settings.set_int(`${this._prefix}-x`, refX);
+            this._settings.set_int(`${this._prefix}-y`, refY);
+        } else {
+            this._settings.set_int(`${this._prefix}-x`, x);
+            this._settings.set_int(`${this._prefix}-y`, y);
+        }
         this._savingPosition = false;
         return Clutter.EVENT_STOP;
     }
@@ -254,6 +310,7 @@ class DesktopWidget extends St.Widget {
         this._settings.disconnectObject(this);
         this._interfaceSettings.disconnectObject(this);
         Main.layoutManager.disconnectObject(this);
+        global.stage.disconnectObject(this);
         this._menu.destroy();
     }
 
