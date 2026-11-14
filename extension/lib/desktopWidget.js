@@ -57,7 +57,10 @@ class DesktopWidget extends St.Widget {
             this._hoverFade = this._fadeFrom + (this._fadeTo - this._fadeFrom) * t;
             this._syncPointer();
         });
-        this.connect('notify::hover', () => this._animateHover(this.hover ? 1 : 0));
+        this.connect('notify::hover', () => {
+            if (this._pointerEffectsActive())
+                this._animateHover(this.hover ? 1 : 0);
+        });
 
         this._buildMenu();
 
@@ -208,6 +211,9 @@ class DesktopWidget extends St.Widget {
         return Clutter.EVENT_STOP;
         }
 
+        if (!this._pointerEffectsActive())
+            return Clutter.EVENT_PROPAGATE;
+
         const [ok, lx, ly] = this.transform_stage_point(sx, sy);
         this._pointer = ok ? [lx / this._width, ly / this._height] : [-1, -1];
         this._syncPointer();
@@ -252,7 +258,13 @@ class DesktopWidget extends St.Widget {
         this._grab = null;
     }
 
+    _pointerEffectsActive() {
+        return Boolean(this.glass?.usesPointer) && this._settings.get_int('spec-strength-pct') > 0;
+    }
+
     _animateHover(target) {
+        if (!this._pointerEffectsActive() && target > 0)
+            return;
         this._fadeTimeline.stop();
         this._fadeFrom = this._hoverFade;
         this._fadeTo = target;
@@ -261,6 +273,8 @@ class DesktopWidget extends St.Widget {
     }
 
     _syncPointer() {
+        if (!this.glass?.usesPointer)
+            return;
         const [u, v] = this._hoverFade > 0 ? this._pointer : [-1, -1];
         this.glass.setPointer(u, v, this._hoverFade);
     }

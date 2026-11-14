@@ -34,18 +34,22 @@ export const GLYPH_FONTS = [
 // The date line always uses the soft font.
 const DAY_FONT = GLYPH_FONTS[0];
 
-function makeLayout(cr, text, font, size, letterSpacing) {
-    const layout = PangoCairo.create_layout(cr);
-    const desc = new Pango.FontDescription();
-    desc.set_family(font.family);
-    desc.set_weight(font.weight);
-    desc.set_absolute_size(Math.max(1, size) * Pango.SCALE);
-    layout.set_font_description(desc);
+const _sharedDesc = new Pango.FontDescription();
+
+function configureLayout(layout, text, font, size, letterSpacing) {
+    _sharedDesc.set_family(font.family);
+    _sharedDesc.set_weight(font.weight);
+    _sharedDesc.set_absolute_size(Math.max(1, size) * Pango.SCALE);
+    layout.set_font_description(_sharedDesc);
     const attrs = new Pango.AttrList();
     attrs.insert(Pango.attr_letter_spacing_new(Math.round(letterSpacing * Pango.SCALE)));
     layout.set_attributes(attrs);
     layout.set_text(text, -1);
     return layout;
+}
+
+function makeLayout(cr, text, font, size, letterSpacing) {
+    return configureLayout(PangoCairo.create_layout(cr), text, font, size, letterSpacing);
 }
 
 export const GlassTextClock = GObject.registerClass(
@@ -73,6 +77,7 @@ class GlassTextClock extends DesktopWidget {
             `changed::${PREFIX}-text-color`, () => this._overlay.queue_repaint(),
             this);
 
+        this._lastTextKey = null;
         this.start();
         this.glass.setGlyphs((cr, w, h) => {
             cr.setSourceRGBA(1, 1, 1, 1);
@@ -80,7 +85,23 @@ class GlassTextClock extends DesktopWidget {
         });
     }
 
-    _textChanged() {
+    _displayState() {
+        const now = new Date();
+        const use24 = this._interfaceSettings.get_string('clock-format') === '24h';
+        const hours = use24 ? String(now.getHours()).padStart(2, '0') : String((now.getHours() + 11) % 12 + 1);
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        // No comma: the soft font's comma looks like a raised apostrophe.
+        const day = `${now.getDate()}  ${now.toLocaleDateString(undefined, {weekday: 'long'})}`;
+        const fontIdx = this._settings.get_int(`${PREFIX}-glyph-font`);
+        const font = GLYPH_FONTS[fontIdx] ?? GLYPH_FONTS[0];
+        return {hours, minutes, day, font, key: `${hours}:${minutes}|${day}|${fontIdx}`};
+    }
+
+    _textChanged(force = false) {
+        const {key} = this._displayState();
+        if (!force && key === this._lastTextKey)
+            return;
+        this._lastTextKey = key;
         this.glass.refresh();
         this._overlay.queue_repaint();
     }
@@ -95,20 +116,15 @@ class GlassTextClock extends DesktopWidget {
     // centred, the digits shrunk to fit 86% of the width. Draws with the
     // current cairo source.
     _paintGlyphs(cr, w, h) {
-        const now = new Date();
-        const use24 = this._interfaceSettings.get_string('clock-format') === '24h';
-        const hours = use24 ? String(now.getHours()).padStart(2, '0') : String((now.getHours() + 11) % 12 + 1);
-        const minutes = String(now.getMinutes()).padStart(2, '0');
-        // No comma: the soft font's comma looks like a raised apostrophe.
-        const day = `${now.getDate()}  ${now.toLocaleDateString(undefined, {weekday: 'long'})}`;
-        const font = GLYPH_FONTS[this._settings.get_int(`${PREFIX}-glyph-font`)] ?? GLYPH_FONTS[0];
+        const {hours, minutes, day, font} = this._displayState();
 
         const requested = Math.min(w * 0.42, h * 0.62);
         const available = Math.max(40, w * 0.86);
+        const scratchLayout = PangoCairo.create_layout(cr);
         const widthAt = size => {
             const spacing = -size * 0.02;
-            const hw = makeLayout(cr, hours, font, size, spacing).get_pixel_extents()[1].width;
-            const mw = makeLayout(cr, minutes, font, size, spacing).get_pixel_extents()[1].width;
+            const hw = configureLayout(scratchLayout, hours, font, size, spacing).get_pixel_extents()[1].width;
+            const mw = configureLayout(scratchLayout, minutes, font, size, spacing).get_pixel_extents()[1].width;
             return hw + mw + Math.max(3, Math.round(size * 0.11)) + 2 * size * 0.10;
         };
         const natural = widthAt(requested);

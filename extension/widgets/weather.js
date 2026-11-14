@@ -102,7 +102,12 @@ class WeatherWidget extends DesktopWidget {
     }
 
     _update() {
-        this._view = this._client.view((h, m) => this._formatHour(h, m));
+        const view = this._client.view((h, m) => this._formatHour(h, m));
+        const viewKey = JSON.stringify([view, this._client.error]);
+        if (viewKey === this._lastViewKey)
+            return;
+        this._lastViewKey = viewKey;
+        this._view = view;
 
         // The Solid gradient depends on the weather; restyle when it changes.
         const category = this._view?.category ?? 'clear';

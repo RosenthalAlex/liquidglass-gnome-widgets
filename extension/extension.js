@@ -86,7 +86,8 @@ export default class LiquidGlassWidgets extends Extension {
             if (win && win.get_window_type() === Meta.WindowType.DESKTOP)
                 sibling = actor;
         }
-        if (sibling && sibling.get_parent() === global.window_group)
+        if (sibling && sibling.get_parent() === global.window_group &&
+            this.widgetGroup.get_previous_sibling() !== sibling)
             global.window_group.set_child_above_sibling(this.widgetGroup, sibling);
     }
 

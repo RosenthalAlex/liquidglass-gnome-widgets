@@ -77,42 +77,54 @@ vec3 tg_edgeSpec(vec2 ndir, float depthPx) {
     return vec3(1.0, 0.985, 0.96) * (rim * facing * tg_specStrength * 0.22);
 }
 
-// All texture reads happen before any branch, so neighbouring pixels on
-// different paths still get well-defined sampling.
 vec4 tg_glass(sampler2D tex, vec2 uv) {
-    vec2 local = vec2(clamp(uv.x, 0.0, 0.4999) * 2.0, clamp(uv.y, 0.0, 1.0));
+    if (uv.x < 0.0 || uv.x >= 0.5 || uv.y < 0.0 || uv.y > 1.0)
+        return vec4(0.0);
+
+    vec2 local = vec2(uv.x * 2.0, uv.y);
 
     vec4 f = tg_fetch(tex, vec2(local.x * 0.5 + 0.5, local.y));
-    float mask = (uv.x >= 0.0 && uv.x < 0.5 && uv.y >= 0.0 && uv.y <= 1.0) ? f.a : 0.0;
-    vec3 field = f.rgb / max(f.a, 1e-3);
+    float mask = f.a;
+    if (mask <= 0.001)
+        return vec4(0.0);
+
+    vec3 field = f.rgb / max(mask, 1e-3);
     float depthPx = field.b * ${SDF_RANGE.toFixed(1)};
     vec2 n = field.rg * 2.0 - vec2(1.0);
     float l = length(n);
     vec2 ndir = l > 1e-4 ? n / l : vec2(0.0, -1.0);
 
-    // Snell on a dome across the edge band; no displacement outside it.
-    float inBand = (tg_refractThickness > 0.0 && depthPx > 0.0 && depthPx < tg_refractThickness) ? 1.0 : 0.0;
-    float t = clamp(depthPx / max(tg_refractThickness, 1e-3), 0.0, 1.0);
-    float sinThetaI = (1.0 - t) * (1.0 - t);
-    float thetaI = asin(clamp(sinThetaI, 0.0, 1.0));
-    float thetaT = asin(clamp(sinThetaI / tg_refractIOR, 0.0, 1.0));
-    float edgeMag = tan(thetaI - thetaT) * inBand;
-    vec2 displaceUV = -ndir * edgeMag * tg_refractScale / tg_size;
-    float chromaPx = tg_chromaStrength * tg_refractThickness * 0.35 * (1.0 - t) * inBand;
-    vec2 chromaUV = -ndir * chromaPx / tg_size;
+    if (tg_solid > 0.5) {
+        vec3 spec = (depthPx < 4.0 && tg_specStrength > 0.0) ? tg_edgeSpec(ndir, depthPx) : vec3(0.0);
+        return vec4((tg_tint.rgb + spec) * mask, mask);
+    }
 
     vec3 col;
-    col.r = tg_backdrop(tex, local + displaceUV + chromaUV).r;
-    col.g = tg_backdrop(tex, local + displaceUV).g;
-    col.b = tg_backdrop(tex, local + displaceUV - chromaUV).b;
+    if (tg_refractThickness <= 0.0 || depthPx <= 0.0 || depthPx >= tg_refractThickness) {
+        col = tg_backdrop(tex, local);
+    } else {
+        // Snell on a dome across the edge band.
+        float t = clamp(depthPx / tg_refractThickness, 0.0, 1.0);
+        float sinThetaI = (1.0 - t) * (1.0 - t);
+        float thetaI = asin(clamp(sinThetaI, 0.0, 1.0));
+        float thetaT = asin(clamp(sinThetaI / tg_refractIOR, 0.0, 1.0));
+        float edgeMag = tan(thetaI - thetaT);
+        vec2 displaceUV = -ndir * edgeMag * tg_refractScale / tg_size;
+        float chromaPx = tg_chromaStrength * tg_refractThickness * 0.35 * (1.0 - t);
 
-    if (mask <= 0.001)
-        return vec4(0.0);
-    if (tg_solid > 0.5)
-        return vec4((tg_tint.rgb + tg_edgeSpec(ndir, depthPx)) * mask, mask);
+        if (chromaPx <= 0.0001) {
+            col = tg_backdrop(tex, local + displaceUV);
+        } else {
+            vec2 chromaUV = -ndir * chromaPx / tg_size;
+            col.r = tg_backdrop(tex, local + displaceUV + chromaUV).r;
+            col.g = tg_backdrop(tex, local + displaceUV).g;
+            col.b = tg_backdrop(tex, local + displaceUV - chromaUV).b;
+        }
+    }
 
     col = mix(col, tg_tint.rgb, tg_tint.a);
-    col += tg_edgeSpec(ndir, depthPx);
+    if (depthPx < 4.0 && tg_specStrength > 0.0)
+        col += tg_edgeSpec(ndir, depthPx);
     return vec4(col * mask, mask);
 }
 `;
@@ -159,7 +171,8 @@ class TextGlass extends Clutter.Actor {
         this._height = 1;
         this._thickness = 35;
         this._paintGlyphs = null;
-        this._tmpDir = GLib.build_filenamev([GLib.get_user_cache_dir(), 'liquidglass-widgets']);
+        this.usesPointer = false;
+        this._tmpDir = GLib.build_filenamev([GLib.get_user_runtime_dir(), 'liquidglass-widgets']);
 
         Main.layoutManager.connectObject('monitors-changed', () => {
             this._monitorIndex = -1;

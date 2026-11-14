@@ -222,12 +222,16 @@ class CalendarWidget extends DesktopWidget {
 
     styleChanged(colors) {
         this._palette = colors;
+        this._gridCacheKey = null;
+        this._gridCacheSurface = null;
         this._canvas?.queue_repaint();
     }
 
     layoutContent(width, height) {
         this._canvas.set_size(width, height);
         this._scroll = 0;
+        this._gridCacheKey = null;
+        this._gridCacheSurface = null;
         this._canvas.queue_repaint();
     }
 
@@ -242,6 +246,8 @@ class CalendarWidget extends DesktopWidget {
     _onDestroy() {
         this._wallClock.run_dispose();
         this._events.destroy();
+        this._gridCacheSurface = null;
+        this._gridCacheKey = null;
         super._onDestroy();
     }
 
@@ -265,7 +271,18 @@ class CalendarWidget extends DesktopWidget {
         const gridW = this._wide ? h : w;
         if (this._wide)
             this._paintEvents(cr, w - gridW - Math.round(h * 0.04), h, colors);
-        this._paintGrid(cr, w - gridW, gridW, h, colors);
+
+        const firstDow = this._firstDayOfWeek();
+        const key = `${gridW}x${h}|${this._today.toDateString()}|${firstDow}|${colors.foreground.r},${colors.foreground.g},${colors.foreground.b}|${colors.todayAccent.r},${colors.todayAccent.g},${colors.todayAccent.b}|${colors.punchOutText}`;
+        if (!this._gridCacheSurface || this._gridCacheKey !== key) {
+            this._gridCacheSurface = new Cairo.ImageSurface(Cairo.Format.ARGB32, Math.max(1, gridW), Math.max(1, h));
+            const gcr = new Cairo.Context(this._gridCacheSurface);
+            this._paintGrid(gcr, 0, gridW, h, colors);
+            gcr.$dispose();
+            this._gridCacheKey = key;
+        }
+        cr.setSourceSurface(this._gridCacheSurface, w - gridW, 0);
+        cr.paint();
     }
 
     _paintGrid(cr, x0, w, h, colors) {

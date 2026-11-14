@@ -109,6 +109,22 @@ function paintCover(cr, surface, x, y, w, h) {
     cr.restore();
 }
 
+function getScaledCover(entry, w, h) {
+    const tw = Math.max(1, Math.round(w));
+    const th = Math.max(1, Math.round(h));
+    if (entry._scaledSurface && entry._scaledW === tw && entry._scaledH === th)
+        return entry._scaledSurface;
+
+    const scaled = new Cairo.ImageSurface(Cairo.Format.ARGB32, tw, th);
+    const scr = new Cairo.Context(scaled);
+    paintCover(scr, entry.surface, 0, 0, tw, th);
+    scr.$dispose();
+    entry._scaledSurface = scaled;
+    entry._scaledW = tw;
+    entry._scaledH = th;
+    return scaled;
+}
+
 // Port of MarqueeText.qml's timing: a title too long for its box waits 5 s,
 // scrolls to its end at 45 ms/px, waits 3 s, scrolls back, waits 3 s, and
 // does that twice. offset() answers for a given overflow; `scrolling` and
@@ -116,13 +132,31 @@ function paintCover(cr, surface, x, y, w, h) {
 // pause ends.
 class Marquee {
     constructor() {
+        this._playing = true;
+        this._pausedAt = 0;
         this.restart();
     }
 
     restart() {
         this._start = GLib.get_monotonic_time() / 1000;
+        this._pausedAt = this._playing ? 0 : this._start;
         this.scrolling = false;
         this.nextChange = Infinity;
+    }
+
+    setPlaying(playing) {
+        const next = Boolean(playing);
+        if (next === this._playing)
+            return;
+        const now = GLib.get_monotonic_time() / 1000;
+        if (!next) {
+            this._pausedAt = now;
+            this.scrolling = false;
+            this.nextChange = Infinity;
+        } else {
+            this._start += now - this._pausedAt;
+        }
+        this._playing = next;
     }
 
     beginFrame() {
@@ -131,6 +165,8 @@ class Marquee {
     }
 
     offset(overflow) {
+        if (!this._playing)
+            return 0;
         const scrollMs = overflow * 45;
         const phases = [[5000, 0, 0], [scrollMs, 0, 1], [3000, 1, 1], [scrollMs, 1, 0], [3000, 0, 0]];
         const cycle = phases.reduce((sum, [d]) => sum + d, 0);
@@ -167,6 +203,7 @@ const SeekBar = GObject.registerClass({
         this._thickness = 3;
         this._dragging = false;
         this._dragPos = 0;
+        this._lastProgressKey = null;
         this.fontSize = 10;
         this.connect('repaint', () => {
             const cr = this.get_context();
@@ -183,7 +220,21 @@ const SeekBar = GObject.registerClass({
 
     set thickness(v) {
         this._thickness = v;
+        this._lastProgressKey = null;
         this.notify('thickness');
+        this.queue_repaint();
+    }
+
+    syncProgress() {
+        const player = this._widget.player;
+        const length = player?.metadata.length ?? 0;
+        const position = this._dragging ? this._dragPos : (player?.position ?? 0);
+        const w = this.width;
+        const barPx = length > 0 ? Math.round(w * clamp(position / length, 0, 1) * 2) : -1;
+        const key = `${Math.floor(position / 1_000_000)}|${Math.floor(length / 1_000_000)}|${barPx}|${w}`;
+        if (!this._dragging && key === this._lastProgressKey)
+            return;
+        this._lastProgressKey = key;
         this.queue_repaint();
     }
 
@@ -301,7 +352,10 @@ const LyricsView = GObject.registerClass({
                 this._setHovered(-1);
         });
         this.connect('notify::size', () => this.invalidate());
-        this.connect('destroy', () => this._clearSnap());
+        this.connect('destroy', () => {
+            this._clearSnap();
+            this._metrics = null;
+        });
     }
 
     get scroll() {
@@ -316,6 +370,10 @@ const LyricsView = GObject.registerClass({
 
     // Lyrics, size or fonts changed: re-measure on the next paint.
     invalidate() {
+        if (this._metrics) {
+            for (const line of this._metrics.lines)
+                line._cacheSurface = null;
+        }
         this._metrics = null;
         this._index = -1;
         this.queue_repaint();
@@ -515,9 +573,9 @@ const LyricsView = GObject.registerClass({
 
         const m = this._measure();
         const visibleCount = Math.max(3, Math.floor(h / (this.fontSize * 2.5)));
-        const layout = PangoCairo.create_layout(cr);
-        layout.set_width(m.width * Pango.SCALE);
-        layout.set_wrap(Pango.WrapMode.WORD_CHAR);
+        let layout = null;
+        let italicFont = null;
+        let boldFont = null;
 
         m.lines.forEach((line, i) => {
             const y = top + line.y - this._scroll;
@@ -542,9 +600,6 @@ const LyricsView = GObject.registerClass({
                 cr.fill();
             }
 
-            layout.set_font_description(this._font(this.fontSize, true, !line.text));
-            layout.set_text(line.text || '♪  ♪  ♪', -1);
-
             const blurFrac = this.blur && dist >= 2 && !this._userScrolling
                 ? Math.min(1, (dist - 1) / (visibleCount + 2)) : 0;
             const spread = blurFrac * this.fontSize * 0.18;
@@ -555,17 +610,42 @@ const LyricsView = GObject.registerClass({
             // Stacked copies add up, so give each the alpha whose n-fold
             // overlap matches the line's opacity.
             const copyOpacity = 1 - (1 - opacity) ** (1 / offsets.length);
+            const cacheKey = `${w}|${m.width}|${this.fontSize}|${fg.r},${fg.g},${fg.b}|${copyOpacity.toFixed(4)}|${spread.toFixed(2)}|${active ? 1 : 0}|${line.text ? 0 : 1}`;
+            const padX = Math.ceil(spread) + 4;
+            const padY = Math.ceil(spread) + 4;
 
-            cr.save();
-            cr.translate(m.hPad, y + m.vPad);
-            if (active)
-                cr.scale(1.05, 1.05);
-            setSource(cr, fg, copyOpacity);
-            for (const [dx, dy] of offsets) {
-                cr.moveTo(dx, dy);
-                PangoCairo.show_layout(cr, layout);
+            if (!line._cacheSurface || line._cacheKey !== cacheKey) {
+                const surfW = Math.max(1, Math.ceil(w * (active ? 1.06 : 1.0)) + 2 * padX);
+                const surfH = Math.max(1, Math.ceil(line.height * (active ? 1.06 : 1.0)) + 2 * padY);
+                const surf = new Cairo.ImageSurface(Cairo.Format.ARGB32, surfW, surfH);
+                const lcr = new Cairo.Context(surf);
+
+                if (!layout) {
+                    layout = PangoCairo.create_layout(lcr);
+                    layout.set_width(m.width * Pango.SCALE);
+                    layout.set_wrap(Pango.WrapMode.WORD_CHAR);
+                }
+                const fontDesc = line.text
+                    ? (boldFont ??= this._font(this.fontSize, true, false))
+                    : (italicFont ??= this._font(this.fontSize, true, true));
+                layout.set_font_description(fontDesc);
+                layout.set_text(line.text || '♪  ♪  ♪', -1);
+
+                lcr.translate(m.hPad + padX, padY + m.vPad);
+                if (active)
+                    lcr.scale(1.05, 1.05);
+                setSource(lcr, fg, copyOpacity);
+                for (const [dx, dy] of offsets) {
+                    lcr.moveTo(dx, dy);
+                    PangoCairo.show_layout(lcr, layout);
+                }
+                lcr.$dispose();
+                line._cacheKey = cacheKey;
+                line._cacheSurface = surf;
             }
-            cr.restore();
+
+            cr.setSourceSurface(line._cacheSurface, -padX, y - padY);
+            cr.paint();
         });
     }
 
@@ -653,7 +733,9 @@ class MusicWidget extends DesktopWidget {
             `changed::${PREFIX}-hide-when-idle`, () => this._syncIdleHide(),
             this);
 
+        this._initialized = false;
         this.start();
+        this._initialized = true;
         this._sync();
     }
 
@@ -692,6 +774,7 @@ class MusicWidget extends DesktopWidget {
 
         // Like the KDE widget, unavailable controls are dimmed but clickable.
         const playing = player?.playing ?? false;
+        this._marquee.setPlaying(playing);
         this._buttons.forEach(b => b.queue_repaint());
 
         this._playPauseItem.label.text = playing ? _('Pause') : _('Play');
@@ -702,12 +785,12 @@ class MusicWidget extends DesktopWidget {
         this._syncPositionTimers();
         this._syncIdleHide();
         this._canvas.queue_repaint();
-        this._seekBar.queue_repaint();
+        this._seekBar.syncProgress();
     }
 
     // The player jumped (seek, track change): redraw progress now.
     onPositionJump() {
-        this._seekBar.queue_repaint();
+        this._seekBar.syncProgress();
         if (this._layout === LAYOUT_BAR)
             this._canvas.queue_repaint();
         if (this._lyricsActive)
@@ -949,7 +1032,8 @@ class MusicWidget extends DesktopWidget {
             this._lyricsActive = false;
         this._applyLyricsSettings();
         this._syncLyricsVisibility(false);
-        this._loadStyle();
+        if (this._initialized)
+            this._loadStyle();
     }
 
     // Controls and the lyrics button move in Tall when lyrics toggle.
@@ -1123,6 +1207,7 @@ class MusicWidget extends DesktopWidget {
                 GLib.source_remove(id);
         }
         this._timeline.stop();
+        this._mpris.disconnectObject(this);
         this._mpris.destroy();
         this._artLoader.destroy();
         this.lyricsClient.destroy();
@@ -1150,10 +1235,12 @@ class MusicWidget extends DesktopWidget {
             squirclePath(cr, w, h, this._settings.get_int('corner-radius'),
                 this._settings.get_int('roundness-x10') / 10);
             cr.clip();
-            if (this._art)
-                paintCover(cr, this._art.surface, 0, 0, w, h);
-            else
+            if (this._art) {
+                cr.setSourceSurface(getScaledCover(this._art, w, h), 0, 0);
+                cr.paint();
+            } else {
                 drawImage(cr, this._noAlbumArt(), (w - h) / 2, 0, h);
+            }
             const shade = new Cairo.LinearGradient(0, 0, 0, h);
             shade.addColorStopRGBA(0, 0, 0, 0, 0.35);
             shade.addColorStopRGBA(0.35, 0, 0, 0, 0.45);
@@ -1189,14 +1276,14 @@ class MusicWidget extends DesktopWidget {
     // Album art in a rounded box; a new cover flips in around the vertical
     // axis (FlipAlbumArt.qml), drawn as a horizontal squeeze.
     _paintArt(cr, box, now) {
-        let surface = this._art?.surface ?? null;
+        let entry = this._art ?? null;
         let squeeze = 1;
         if (this._flipFrom) {
             const t = clamp((now - this._flipStart) / FLIP_MS, 0, 1);
             const angle = easeInOutQuad(t) * Math.PI;
             squeeze = Math.abs(Math.cos(angle));
             if (angle < Math.PI / 2)
-                surface = this._flipFrom.surface;
+                entry = this._flipFrom;
             if (t >= 1)
                 this._flipFrom = null;
         }
@@ -1207,10 +1294,12 @@ class MusicWidget extends DesktopWidget {
         cr.translate(-box.w / 2, 0);
         roundedRect(cr, 0, 0, box.w, box.h, box.r);
         cr.clip();
-        if (surface)
-            paintCover(cr, surface, 0, 0, box.w, box.h);
-        else
+        if (entry?.surface) {
+            cr.setSourceSurface(getScaledCover(entry, box.w, box.h), 0, 0);
+            cr.paint();
+        } else {
             drawImage(cr, this._noAlbumArt(), 0, 0, box.w);
+        }
         if (squeeze < 1) {
             // Darken the far side of the turn a little for depth.
             cr.setSourceRGBA(0, 0, 0, (1 - squeeze) * 0.35);

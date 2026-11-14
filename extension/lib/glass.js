@@ -170,17 +170,22 @@ vec4 lg_glass(sampler2D tex, vec2 uv) {
 
         vec2 displaceUV = -ndir * edgeMag * lg_refractScale / lg_size;
         float chromaPx = lg_chromaStrength * lg_refractThickness * 0.35 * (1.0 - t);
-        vec2 chromaUV = -ndir * chromaPx / lg_size;
-
-        col.r = lg_sample(tex, uv + displaceUV + chromaUV).r;
-        col.g = lg_sample(tex, uv + displaceUV).g;
-        col.b = lg_sample(tex, uv + displaceUV - chromaUV).b;
+        if (chromaPx <= 0.0001) {
+            col = lg_sample(tex, uv + displaceUV);
+        } else {
+            vec2 chromaUV = -ndir * chromaPx / lg_size;
+            col.r = lg_sample(tex, uv + displaceUV + chromaUV).r;
+            col.g = lg_sample(tex, uv + displaceUV).g;
+            col.b = lg_sample(tex, uv + displaceUV - chromaUV).b;
+        }
     }
 
     vec3 tintColor = mix(lg_tint.rgb, lg_tintBottom.rgb, lg_tintBottom.a > 0.0 ? uv.y : 0.0);
     col = mix(col, tintColor, lg_tint.a);
-    col += lg_edgeSpec(ndir, depthPx);
-    col += lg_cornerSpec(p, depthPx);
+    if (lg_specStrength > 0.0 && depthPx < 3.0) {
+        col += lg_edgeSpec(ndir, depthPx);
+        col += lg_cornerSpec(p, depthPx);
+    }
 
     // ~1px AA feather on the silhouette; output is premultiplied.
     float mask = 1.0 - smoothstep(-0.5, 0.5, d);
@@ -228,6 +233,10 @@ class LiquidGlass extends Clutter.Actor {
         this._screenX = 0;
         this._screenY = 0;
         this._width = 1;
+        this.usesPointer = true;
+        this._lastPointerU = -2;
+        this._lastPointerV = -2;
+        this._lastPointerFade = -1;
         this._height = 1;
 
         this.setPointer(-1, -1, 0);
@@ -294,6 +303,16 @@ class LiquidGlass extends Clutter.Actor {
 
     // u, v: pointer position in widget UV (-1 = none); fade: 0..1 hover.
     setPointer(u, v, fade) {
+        if (fade <= 0 && this._lastPointerFade <= 0)
+            return;
+        if (fade > 0 &&
+            Math.abs(u - this._lastPointerU) < 0.004 &&
+            Math.abs(v - this._lastPointerV) < 0.004 &&
+            Math.abs(fade - this._lastPointerFade) < 0.005)
+            return;
+        this._lastPointerU = u;
+        this._lastPointerV = v;
+        this._lastPointerFade = fade;
         this._effect.setUniform('mousePos', [u, v]);
         this._effect.setUniform('mouseFade', [fade]);
         this._effect.queue_repaint();

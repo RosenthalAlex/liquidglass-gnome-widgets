@@ -774,6 +774,7 @@ class TimerWidget extends DesktopWidget {
         if (this._tickSourceId)
             GLib.source_remove(this._tickSourceId);
         this._tickSourceId = 0;
+        this._model?.disconnectObject(this);
         super._onDestroy();
     }
 

@@ -16,12 +16,24 @@ export class TextPainter {
     constructor(cr) {
         this._cr = cr;
         this._layout = PangoCairo.create_layout(cr);
+        this._desc = new Pango.FontDescription();
+        this._emptyAttrs = new Pango.AttrList();
+        this._lastKey = null;
+        this._lastExtents = null;
     }
 
     _setup(text, font, {maxWidth = -1, letterSpacing = 0} = {}) {
-        const desc = new Pango.FontDescription();
+        const weight = font.weight ?? Pango.Weight.NORMAL;
+        const key = `${text}\0${font.family}\0${weight}\0${font.size}\0${maxWidth}\0${letterSpacing}`;
+        if (key === this._lastKey)
+            return this._layout;
+
+        this._lastKey = key;
+        this._lastExtents = null;
+
+        const desc = this._desc;
         desc.set_family(font.family);
-        desc.set_weight(font.weight ?? Pango.Weight.NORMAL);
+        desc.set_weight(weight);
         desc.set_absolute_size(Math.max(1, font.size) * Pango.SCALE);
 
         const layout = this._layout;
@@ -29,10 +41,13 @@ export class TextPainter {
         layout.set_width(maxWidth > 0 ? Math.round(maxWidth * Pango.SCALE) : -1);
         layout.set_ellipsize(maxWidth > 0 ? Pango.EllipsizeMode.END : Pango.EllipsizeMode.NONE);
 
-        const attrs = new Pango.AttrList();
-        if (letterSpacing)
+        if (letterSpacing) {
+            const attrs = new Pango.AttrList();
             attrs.insert(Pango.attr_letter_spacing_new(Math.round(letterSpacing * Pango.SCALE)));
-        layout.set_attributes(attrs);
+            layout.set_attributes(attrs);
+        } else {
+            layout.set_attributes(this._emptyAttrs);
+        }
 
         layout.set_text(text, -1);
         return layout;
@@ -40,7 +55,10 @@ export class TextPainter {
 
     // {ink, logical} pixel rectangles, as Pango reports them.
     measure(text, font, options) {
-        const [ink, logical] = this._setup(text, font, options).get_pixel_extents();
+        const layout = this._setup(text, font, options);
+        if (!this._lastExtents)
+            this._lastExtents = layout.get_pixel_extents();
+        const [ink, logical] = this._lastExtents;
         return {ink, logical};
     }
 
@@ -54,8 +72,8 @@ export class TextPainter {
     // `inkCenter` centres the glyphs' ink vertically instead of the line box,
     // which sits digits optically in the middle of a circle.
     draw(text, x, y, font, {align = 0, valign = 0, inkCenter = false, ...options} = {}) {
-        const layout = this._setup(text, font, options);
-        const [ink, logical] = layout.get_pixel_extents();
+        const {ink, logical} = this.measure(text, font, options);
+        const layout = this._layout;
         const left = x - logical.width * align - logical.x;
         const top = inkCenter
             ? y - ink.y - ink.height / 2

@@ -41,13 +41,13 @@ function gaussianBlur(src, w, h, sigma) {
         }
     }
     for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-            let acc = 0;
-            for (let k = -radius; k <= radius; k++) {
-                const yy = Math.min(h - 1, Math.max(0, y + k));
-                acc += tmp[yy * w + x] * kernel[k + radius];
-            }
-            out[y * w + x] = acc;
+        const outRow = y * w;
+        for (let k = -radius; k <= radius; k++) {
+            const yy = Math.min(h - 1, Math.max(0, y + k));
+            const srcRow = yy * w;
+            const wK = kernel[k + radius];
+            for (let x = 0; x < w; x++)
+                out[outRow + x] += tmp[srcRow + x] * wK;
         }
     }
     return out;
@@ -111,7 +111,7 @@ export function buildGlyphField(coverage, w, h, {scale = 1, thickness = 35} = {}
             const bl = at(x - step, y + step), bc = at(x, y + step), br = at(x + step, y + step);
             let nx = -((tr + 2 * mr + br) - (tl + 2 * ml + bl));
             let ny = -((bl + 2 * bc + br) - (tl + 2 * tc + tr));
-            const len = Math.hypot(nx, ny);
+            const len = Math.sqrt(nx * nx + ny * ny);
             if (len > 1e-3) {
                 nx /= len;
                 ny /= len;

@@ -120,7 +120,7 @@ export class AlbumArtLoader {
         });
         this._cache = new Map(); // url -> {surface, palette}
         this._cancellable = null;
-        this._tmpDir = GLib.build_filenamev([GLib.get_user_cache_dir(), 'liquidglass-widgets']);
+        this._tmpDir = GLib.build_filenamev([GLib.get_user_runtime_dir(), 'liquidglass-widgets']);
     }
 
     // Resolves to {surface, palette} or null; a newer load() cancels an
